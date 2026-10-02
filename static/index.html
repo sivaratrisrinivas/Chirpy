@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chirpy</title>
+<style>
+  :root { --fg:#16202a; --muted:#5b6b7a; --line:#e3e8ee; --accent:#1d72e8; --bg:#f7f9fb; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:15px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; color:var(--fg); background:var(--bg); }
+  main { max-width:620px; margin:0 auto; padding:24px 16px 64px; }
+  h1 { margin:0 0 4px; font-size:28px; } .sub { color:var(--muted); margin:0 0 20px; }
+  .card { background:#fff; border:1px solid var(--line); border-radius:12px; padding:16px; margin-bottom:16px; }
+  input, textarea { width:100%; padding:10px 12px; border:1px solid var(--line); border-radius:8px; font:inherit; }
+  textarea { resize:vertical; min-height:72px; }
+  button { background:var(--accent); color:#fff; border:0; border-radius:8px; padding:9px 14px; font:inherit; cursor:pointer; }
+  button.ghost { background:transparent; color:var(--accent); padding:4px 8px; }
+  button:disabled { opacity:.5; cursor:default; }
+  .row { display:flex; gap:8px; align-items:center; } .row > * { flex:1; } .row > button { flex:0 0 auto; }
+  .between { display:flex; justify-content:space-between; align-items:center; gap:8px; }
+  .muted { color:var(--muted); font-size:13px; } .err { color:#c62828; font-size:13px; min-height:18px; }
+  .chirp { border-top:1px solid var(--line); padding:12px 0; } .chirp:first-child { border-top:0; }
+  .badge { background:#e53935; color:#fff; border-radius:999px; padding:1px 8px; font-size:12px; }
+  .tabs { display:flex; gap:4px; margin-bottom:8px; }
+  .tabs button { background:#eef2f6; color:var(--fg); } .tabs button.on { background:var(--accent); color:#fff; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Chirpy</h1>
+  <p class="sub">A tiny social feed backed by a Go API, Postgres, JWT access tokens and rotating refresh tokens.</p>
+
+  <section class="card" id="auth">
+    <div class="tabs"><button id="tab-login" class="on">Log in</button><button id="tab-signup">Sign up</button></div>
+    <form id="auth-form">
+      <div class="row" style="margin-bottom:8px">
+        <input id="email" type="email" placeholder="email" autocomplete="username" required>
+        <input id="password" type="password" placeholder="password (8+ chars)" autocomplete="current-password" minlength="8" required>
+        <button id="auth-btn">Log in</button>
+      </div>
+      <div class="err" id="auth-err"></div>
+    </form>
+  </section>
+
+  <section class="card" id="me" hidden>
+    <div class="between">
+      <div>Signed in as <strong id="me-email"></strong> <span class="badge" id="me-red" hidden>Chirpy Red</span></div>
+      <button class="ghost" id="logout">Log out</button>
+    </div>
+    <form id="post-form" style="margin-top:12px">
+      <textarea id="body" maxlength="140" placeholder="What's happening? (140 characters)"></textarea>
+      <div class="between" style="margin-top:8px"><span class="muted" id="count">0 / 140</span><button id="post-btn">Chirp</button></div>
+      <div class="err" id="post-err"></div>
+    </form>
+  </section>
+
+  <section class="card">
+    <div class="between">
+      <strong>Feed</strong>
+      <label class="muted"><input type="checkbox" id="mine" style="width:auto"> only mine</label>
+    </div>
+    <div id="feed"></div>
+    <div style="text-align:center;margin-top:8px"><button class="ghost" id="more" hidden>Load more</button></div>
+    <p class="muted" id="empty" hidden>No chirps yet.</p>
+  </section>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const store = {
+  get: () => JSON.parse(localStorage.getItem("chirpy") || "null"),
+  set: (v) => v ? localStorage.setItem("chirpy", JSON.stringify(v)) : localStorage.removeItem("chirpy"),
+};
+let mode = "login", nextCursor = "";
+
+async function api(path, { method = "GET", body, auth } = {}) {
+  const headers = { "Content-Type": "application/json" };
+  const s = store.get();
+  if (auth && s) headers.Authorization = "Bearer " + s.token;
+  let res = await fetch(path, { method, headers, body: body ? JSON.stringify(body) : undefined });
+  if (res.status === 401 && auth && s && s.refresh_token) {
+    // Access token expired: trade the refresh token for a new one and retry once.
+    const r = await fetch("/api/refresh", { method: "POST", headers: { Authorization: "Bearer " + s.refresh_token } });
+    if (r.ok) {
+      s.token = (await r.json()).token; store.set(s);
+      headers.Authorization = "Bearer " + s.token;
+      res = await fetch(path, { method, headers, body: body ? JSON.stringify(body) : undefined });
+    } else { store.set(null); render(); }
+  }
+  return res;
+}
+async function errText(res) { try { return (await res.json()).error || res.statusText; } catch { return res.statusText; } }
+
+function setMode(m) {
+  mode = m;
+  $("tab-login").classList.toggle("on", m === "login");
+  $("tab-signup").classList.toggle("on", m === "signup");
+  $("auth-btn").textContent = m === "login" ? "Log in" : "Sign up";
+  $("auth-err").textContent = "";
+}
+$("tab-login").onclick = () => setMode("login");
+$("tab-signup").onclick = () => setMode("signup");
+
+$("auth-form").onsubmit = async (e) => {
+  e.preventDefault();
+  const creds = { email: $("email").value, password: $("password").value };
+  $("auth-btn").disabled = true; $("auth-err").textContent = "";
+  try {
+    if (mode === "signup") {
+      const r = await api("/api/users", { method: "POST", body: creds });
+      if (!r.ok) throw new Error(await errText(r));
+    }
+    const r = await api("/api/login", { method: "POST", body: creds });
+    if (!r.ok) throw new Error(await errText(r));
+    store.set(await r.json()); $("password").value = "";
+    render(); loadFeed(true);
+  } catch (err) { $("auth-err").textContent = err.message; }
+  finally { $("auth-btn").disabled = false; }
+};
+
+$("logout").onclick = async () => {
+  const s = store.get();
+  if (s) await fetch("/api/revoke", { method: "POST", headers: { Authorization: "Bearer " + s.refresh_token } });
+  store.set(null); render(); loadFeed(true);
+};
+
+$("body").oninput = () => { $("count").textContent = [...$("body").value].length + " / 140"; };
+$("post-form").onsubmit = async (e) => {
+  e.preventDefault();
+  $("post-btn").disabled = true; $("post-err").textContent = "";
+  const r = await api("/api/chirps", { method: "POST", body: { body: $("body").value }, auth: true });
+  $("post-btn").disabled = false;
+  if (!r.ok) { $("post-err").textContent = await errText(r); return; }
+  $("body").value = ""; $("count").textContent = "0 / 140";
+  loadFeed(true);
+};
+$("mine").onchange = () => loadFeed(true);
+$("more").onclick = () => loadFeed(false);
+
+function chirpEl(c) {
+  const s = store.get();
+  const div = document.createElement("div"); div.className = "chirp";
+  const body = document.createElement("div"); body.textContent = c.body;
+  const meta = document.createElement("div"); meta.className = "between";
+  const when = document.createElement("span"); when.className = "muted";
+  when.textContent = new Date(c.created_at + (c.created_at.endsWith("Z") ? "" : "Z")).toLocaleString() + (s && s.id === c.user_id ? " · you" : "");
+  meta.append(when);
+  if (s && s.id === c.user_id) {
+    const del = document.createElement("button"); del.className = "ghost"; del.textContent = "Delete";
+    del.onclick = async () => { const r = await api("/api/chirps/" + c.id, { method: "DELETE", auth: true }); if (r.ok) div.remove(); };
+    meta.append(del);
+  }
+  div.append(body, meta); return div;
+}
+
+async function loadFeed(reset) {
+  if (reset) { nextCursor = ""; $("feed").innerHTML = ""; }
+  const s = store.get();
+  const q = new URLSearchParams({ sort: "desc", limit: "20" });
+  if (nextCursor) q.set("cursor", nextCursor);
+  if ($("mine").checked && s) q.set("author_id", s.id);
+  const r = await api("/api/chirps?" + q);
+  if (!r.ok) return;
+  const list = await r.json();
+  list.forEach((c) => $("feed").append(chirpEl(c)));
+  nextCursor = r.headers.get("X-Next-Cursor") || "";
+  $("more").hidden = !nextCursor;
+  $("empty").hidden = $("feed").children.length > 0;
+}
+
+function render() {
+  const s = store.get();
+  $("auth").hidden = !!s; $("me").hidden = !s;
+  $("mine").disabled = !s; if (!s) $("mine").checked = false;
+  if (s) { $("me-email").textContent = s.email; $("me-red").hidden = !s.is_chirpy_red; }
+}
+render(); loadFeed(true);
+</script>
+</body>
+</html>

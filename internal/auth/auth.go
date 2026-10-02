@@ -2,6 +2,7 @@ package auth
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -61,6 +62,7 @@ func ValidateJWT(tokenString, tokenSecret string) (uuid.UUID, error) {
 		tokenString,
 		&claimsStruct,
 		func(token *jwt.Token) (interface{}, error) { return []byte(tokenSecret), nil },
+		jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}),
 	)
 	if err != nil {
 		return uuid.Nil, err
@@ -92,12 +94,11 @@ func GetBearerToken(headers http.Header) (string, error) {
 	if authHeader == "" {
 		return "", ErrNoAuthHeaderIncluded
 	}
-	splitAuth := strings.Split(authHeader, " ")
-	if len(splitAuth) < 2 || splitAuth[0] != "Bearer" {
+	scheme, token, found := strings.Cut(authHeader, " ")
+	if !found || scheme != "Bearer" || token == "" {
 		return "", errors.New("malformed authorization header")
 	}
-
-	return splitAuth[1], nil
+	return token, nil
 }
 
 // MakeRefreshToken makes a random 256 bit token
@@ -111,33 +112,21 @@ func MakeRefreshToken() (string, error) {
 	return hex.EncodeToString(token), nil
 }
 
-// GetAPIKey -
-// GetAPIKey extracts an API key from HTTP headers
+// GetAPIKey extracts the key from an "Authorization: ApiKey <key>" header.
 func GetAPIKey(headers http.Header) (string, error) {
-	// Look for a header called "Authorization" in the request
-	// Like checking for a special badge in someone's ID card
 	authHeader := headers.Get("Authorization")
-
-	// If no Authorization header was found, tell the caller there's an error
-	// Like turning away someone who forgot their ID
 	if authHeader == "" {
 		return "", ErrNoAuthHeaderIncluded
 	}
-
-	// Split the header value into parts using space as separator
-	// The format should be "ApiKey ACTUAL-KEY-HERE"
-	// Like splitting "First Last" into ["First", "Last"]
-	splitAuth := strings.Split(authHeader, " ")
-
-	// Check two things:
-	// 1. Make sure we got at least 2 parts after splitting
-	// 2. Make sure the first part is exactly "ApiKey"
-	// Like checking an ID badge has both a photo AND correct badge type
-	if len(splitAuth) < 2 || splitAuth[0] != "ApiKey" {
+	scheme, key, found := strings.Cut(authHeader, " ")
+	if !found || scheme != "ApiKey" || key == "" {
 		return "", errors.New("malformed authorization header")
 	}
+	return key, nil
+}
 
-	// Return just the key part (the second piece after splitting)
-	// Like returning just the ID number from a complete badge
-	return splitAuth[1], nil
+// HashToken returns the hex SHA-256 of an opaque token for storage.
+func HashToken(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])
 }

@@ -1,2 +1,6 @@
-out
 .env
+out
+/Chirpy
+/chirpy
+*.test
+coverage.out
