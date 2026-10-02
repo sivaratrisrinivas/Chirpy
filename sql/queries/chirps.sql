@@ -9,18 +9,27 @@ VALUES (
 )
 RETURNING *;
 
--- name: GetChirpsAsc :many
+-- name: ListChirpsAsc :many
+-- Keyset pagination: rows strictly after (cursor_created_at, cursor_id).
 SELECT * FROM chirps
-ORDER BY created_at ASC;
+WHERE (sqlc.narg('author_id')::uuid IS NULL OR user_id = sqlc.narg('author_id')::uuid)
+  AND (sqlc.narg('cursor_created_at')::timestamp IS NULL
+       OR (created_at, id) > (sqlc.narg('cursor_created_at')::timestamp, sqlc.narg('cursor_id')::uuid))
+ORDER BY created_at ASC, id ASC
+LIMIT sqlc.arg('row_limit');
 
--- name: GetChirpsDesc :many
+-- name: ListChirpsDesc :many
 SELECT * FROM chirps
-ORDER BY created_at DESC;
+WHERE (sqlc.narg('author_id')::uuid IS NULL OR user_id = sqlc.narg('author_id')::uuid)
+  AND (sqlc.narg('cursor_created_at')::timestamp IS NULL
+       OR (created_at, id) < (sqlc.narg('cursor_created_at')::timestamp, sqlc.narg('cursor_id')::uuid))
+ORDER BY created_at DESC, id DESC
+LIMIT sqlc.arg('row_limit');
 
 -- name: GetChirp :one
 SELECT * FROM chirps
 WHERE id = $1;
 
--- name: DeleteChirp :exec
+-- name: DeleteChirpByOwner :execrows
 DELETE FROM chirps
-WHERE id = $1;
+WHERE id = $1 AND user_id = $2;

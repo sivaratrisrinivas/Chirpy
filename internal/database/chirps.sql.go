@@ -7,6 +7,7 @@ package database
 
 import (
 	"context"
+	"database/sql"
 
 	"github.com/google/uuid"
 )
@@ -41,14 +42,22 @@ func (q *Queries) CreateChirp(ctx context.Context, arg CreateChirpParams) (Chirp
 	return i, err
 }
 
-const deleteChirp = `-- name: DeleteChirp :exec
+const deleteChirpByOwner = `-- name: DeleteChirpByOwner :execrows
 DELETE FROM chirps
-WHERE id = $1
+WHERE id = $1 AND user_id = $2
 `
 
-func (q *Queries) DeleteChirp(ctx context.Context, id uuid.UUID) error {
-	_, err := q.db.ExecContext(ctx, deleteChirp, id)
-	return err
+type DeleteChirpByOwnerParams struct {
+	ID     uuid.UUID
+	UserID uuid.UUID
+}
+
+func (q *Queries) DeleteChirpByOwner(ctx context.Context, arg DeleteChirpByOwnerParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteChirpByOwner, arg.ID, arg.UserID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const getChirp = `-- name: GetChirp :one
@@ -69,13 +78,30 @@ func (q *Queries) GetChirp(ctx context.Context, id uuid.UUID) (Chirp, error) {
 	return i, err
 }
 
-const getChirpsAsc = `-- name: GetChirpsAsc :many
+const listChirpsAsc = `-- name: ListChirpsAsc :many
 SELECT id, created_at, updated_at, body, user_id FROM chirps
-ORDER BY created_at ASC
+WHERE ($1::uuid IS NULL OR user_id = $1::uuid)
+  AND ($2::timestamp IS NULL
+       OR (created_at, id) > ($2::timestamp, $3::uuid))
+ORDER BY created_at ASC, id ASC
+LIMIT $4
 `
 
-func (q *Queries) GetChirpsAsc(ctx context.Context) ([]Chirp, error) {
-	rows, err := q.db.QueryContext(ctx, getChirpsAsc)
+type ListChirpsAscParams struct {
+	AuthorID        uuid.NullUUID
+	CursorCreatedAt sql.NullTime
+	CursorID        uuid.NullUUID
+	RowLimit        int32
+}
+
+// Keyset pagination: rows strictly after (cursor_created_at, cursor_id).
+func (q *Queries) ListChirpsAsc(ctx context.Context, arg ListChirpsAscParams) ([]Chirp, error) {
+	rows, err := q.db.QueryContext(ctx, listChirpsAsc,
+		arg.AuthorID,
+		arg.CursorCreatedAt,
+		arg.CursorID,
+		arg.RowLimit,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -103,13 +129,29 @@ func (q *Queries) GetChirpsAsc(ctx context.Context) ([]Chirp, error) {
 	return items, nil
 }
 
-const getChirpsDesc = `-- name: GetChirpsDesc :many
+const listChirpsDesc = `-- name: ListChirpsDesc :many
 SELECT id, created_at, updated_at, body, user_id FROM chirps
-ORDER BY created_at DESC
+WHERE ($1::uuid IS NULL OR user_id = $1::uuid)
+  AND ($2::timestamp IS NULL
+       OR (created_at, id) < ($2::timestamp, $3::uuid))
+ORDER BY created_at DESC, id DESC
+LIMIT $4
 `
 
-func (q *Queries) GetChirpsDesc(ctx context.Context) ([]Chirp, error) {
-	rows, err := q.db.QueryContext(ctx, getChirpsDesc)
+type ListChirpsDescParams struct {
+	AuthorID        uuid.NullUUID
+	CursorCreatedAt sql.NullTime
+	CursorID        uuid.NullUUID
+	RowLimit        int32
+}
+
+func (q *Queries) ListChirpsDesc(ctx context.Context, arg ListChirpsDescParams) ([]Chirp, error) {
+	rows, err := q.db.QueryContext(ctx, listChirpsDesc,
+		arg.AuthorID,
+		arg.CursorCreatedAt,
+		arg.CursorID,
+		arg.RowLimit,
+	)
 	if err != nil {
 		return nil, err
 	}
