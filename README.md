@@ -4,6 +4,9 @@ A small social feed (think early Twitter) with a Go HTTP API, Postgres, and a pl
 
 ![Chirpy web client](docs/screenshot.png)
 
+
+**Live:** https://chirpy-slpq.onrender.com/app/ (API under `/api`, health at `/api/healthz`). Go server in Docker on Render's free plan, Postgres on a Supabase free project with the goose migrations applied. The free instance sleeps after 15 minutes idle, so the first request can take up to a minute.
+
 ## What it does
 
 - Sign up, log in, post 140-character chirps, browse and page through a feed, delete your own chirps.
